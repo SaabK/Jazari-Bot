@@ -66,16 +66,16 @@ async def on_ready():
 async def hello(ctx):
     await ctx.send("Hello bro, I'm alive.")
 
-# ===== UPDATE TODAY =====
+# =====================================================
+# UPDATE PROGRESS (SELF-AUTO USER)
+# =====================================================
 @bot.command()
-async def updateProgress(ctx, member: discord.Member, value: float):
+async def updateProgress(ctx, value: float):
     today = str(get_today())
+    member = ctx.author
 
     if ROLE_NAME not in [role.name for role in member.roles]:
         return await ctx.send("User is not an Arabic Learner.")
-
-    if ctx.author != member and not ctx.author.guild_permissions.administrator:
-        return await ctx.send("You can only update your own progress.")
 
     if value > MAX_DAILY and not ctx.author.guild_permissions.administrator:
         return await ctx.send("Value too high. Stop cheating.")
@@ -89,16 +89,16 @@ async def updateProgress(ctx, member: discord.Member, value: float):
 
     await ctx.send(f"{member.mention} progress updated to {value}")
 
-# ===== UPDATE YESTERDAY =====
+# =====================================================
+# UPDATE YESTERDAY (SELF OR ADMIN)
+# =====================================================
 @bot.command()
-async def updateYesterday(ctx, member: discord.Member, value: float):
+async def updateYesterday(ctx, value: float):
     yesterday = str(get_yesterday())
+    member = ctx.author
 
     if ROLE_NAME not in [role.name for role in member.roles]:
         return await ctx.send("User is not an Arabic Learner.")
-
-    if ctx.author != member and not ctx.author.guild_permissions.administrator:
-        return await ctx.send("Not allowed.")
 
     cursor.execute("""
     INSERT OR REPLACE INTO progress (date, user_id, value)
@@ -109,7 +109,9 @@ async def updateYesterday(ctx, member: discord.Member, value: float):
 
     await ctx.send(f"{member.mention} yesterday's progress updated.")
 
-# ===== SHOW PROGRESS =====
+# =====================================================
+# SHOW PROGRESS
+# =====================================================
 @bot.command()
 async def showProgress(ctx, date: str = None):
     if date is None:
@@ -149,7 +151,9 @@ async def showProgress(ctx, date: str = None):
 
     await ctx.send(message)
 
-# ===== REPORT GENERATION =====
+# =====================================================
+# DAILY REPORT GENERATION (USES LAST STORED VALUE)
+# =====================================================
 async def generate_report(guild):
     yesterday = str(get_yesterday())
 
@@ -169,6 +173,9 @@ async def generate_report(guild):
         if not member:
             continue
 
+        if ROLE_NAME not in [role.name for role in member.roles]:
+            continue
+
         percent = (value / TARGET) * 100
         entries.append((member, value, percent))
 
@@ -185,13 +192,14 @@ async def generate_report(guild):
 
     return message
 
-# ===== DAILY AUTO POST =====
+# =====================================================
+# DAILY AUTO POST (10 AM PKT = 5 AM UTC)
+# =====================================================
 @tasks.loop(minutes=1)
 async def daily_post():
     now = datetime.utcnow()
 
-    # 8 AM PKT = 3 AM UTC
-    if now.hour == 3 and now.minute == 0:
+    if now.hour == 5 and now.minute == 0:
         for guild in bot.guilds:
             channel = discord.utils.get(guild.text_channels, name=CHANNEL_NAME)
             if channel:
