@@ -190,8 +190,8 @@ async def generate_report(guild):
 async def daily_post():
     now = datetime.utcnow()
 
-    # 7 AM PKT = 2 AM UTC
-    if now.hour == 2 and now.minute == 0:
+    # 8 AM PKT = 3 AM UTC
+    if now.hour == 3 and now.minute == 0:
         for guild in bot.guilds:
             channel = discord.utils.get(guild.text_channels, name=CHANNEL_NAME)
             if channel:
