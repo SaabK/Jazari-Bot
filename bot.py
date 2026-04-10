@@ -1,6 +1,6 @@
 import discord
 import os
-import json
+import sqlite3
 from dotenv import load_dotenv
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
@@ -11,11 +11,27 @@ TOKEN = os.getenv("TOKEN")
 
 # ===== CONFIG =====
 TARGET = 127
-DATA_FILE = "progress.json"
 ROLE_NAME = "Arabic Learner"
 CHANNEL_NAME = "arabic-updates"
-MAX_DAILY = 10  # anti-cheat
-START_DATE = datetime(2026, 3, 30).date()  # change if your Day 1 is different
+MAX_DAILY = 10
+START_DATE = datetime(2026, 3, 30).date()
+
+# ===== SQLITE SETUP =====
+DB_FILE = "progress.db"
+
+conn = sqlite3.connect(DB_FILE)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS progress (
+    date TEXT,
+    user_id TEXT,
+    value REAL,
+    PRIMARY KEY (date, user_id)
+)
+""")
+
+conn.commit()
 
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
@@ -24,30 +40,16 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!!', intents=intents)
 
-# ===== DATA HANDLING =====
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
+# ===== HELPERS =====
 def get_today():
     return datetime.utcnow().date()
 
 def get_yesterday():
     return get_today() - timedelta(days=1)
 
-def format_date(date_obj):
-    return str(date_obj)
-
 def get_day_number():
     return (get_today() - START_DATE).days + 1
 
-# ===== PROGRESS BAR =====
 def progress_bar(percent):
     filled = int(percent // 5)
     return "█" * filled + "░" * (20 - filled)
@@ -55,7 +57,7 @@ def progress_bar(percent):
 # ===== EVENTS =====
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user}')
+    print(f"Logged in as {bot.user}")
     daily_post.start()
 
 # ===== COMMANDS =====
@@ -64,72 +66,68 @@ async def on_ready():
 async def hello(ctx):
     await ctx.send("Hello bro, I'm alive.")
 
-# UPDATE TODAY
+# ===== UPDATE TODAY =====
 @bot.command()
 async def updateProgress(ctx, member: discord.Member, value: float):
     today = str(get_today())
-    data = load_data()
 
-    # Role check
     if ROLE_NAME not in [role.name for role in member.roles]:
         return await ctx.send("User is not an Arabic Learner.")
 
-    # Self update restriction
     if ctx.author != member and not ctx.author.guild_permissions.administrator:
         return await ctx.send("You can only update your own progress.")
 
     if value > MAX_DAILY and not ctx.author.guild_permissions.administrator:
         return await ctx.send("Value too high. Stop cheating.")
 
-    if today not in data:
-        data[today] = {}
+    cursor.execute("""
+    INSERT OR REPLACE INTO progress (date, user_id, value)
+    VALUES (?, ?, ?)
+    """, (today, str(member.id), value))
 
-    # Prevent multiple updates
-    if str(member.id) in data[today] and not ctx.author.guild_permissions.administrator:
-        return await ctx.send("You already updated today.")
-
-    data[today][str(member.id)] = value
-    save_data(data)
+    conn.commit()
 
     await ctx.send(f"{member.mention} progress updated to {value}")
 
-# UPDATE YESTERDAY
+# ===== UPDATE YESTERDAY =====
 @bot.command()
 async def updateYesterday(ctx, member: discord.Member, value: float):
     yesterday = str(get_yesterday())
-    data = load_data()
 
-    if yesterday not in data:
-        return await ctx.send("No data for yesterday.")
+    if ROLE_NAME not in [role.name for role in member.roles]:
+        return await ctx.send("User is not an Arabic Learner.")
 
     if ctx.author != member and not ctx.author.guild_permissions.administrator:
         return await ctx.send("Not allowed.")
 
-    data[yesterday][str(member.id)] = value
-    save_data(data)
+    cursor.execute("""
+    INSERT OR REPLACE INTO progress (date, user_id, value)
+    VALUES (?, ?, ?)
+    """, (yesterday, str(member.id), value))
+
+    conn.commit()
 
     await ctx.send(f"{member.mention} yesterday's progress updated.")
 
-# Shows Progress Immediately
+# ===== SHOW PROGRESS =====
 @bot.command()
 async def showProgress(ctx, date: str = None):
-    data = load_data()
-
-    # Default = today
     if date is None:
         date = str(get_today())
 
-    if date not in data:
-        return await ctx.send("No data for this date.")
+    cursor.execute("""
+    SELECT user_id, value FROM progress WHERE date = ?
+    """, (date,))
+
+    rows = cursor.fetchall()
 
     entries = []
 
-    for user_id, value in data[date].items():
+    for user_id, value in rows:
         member = ctx.guild.get_member(int(user_id))
         if not member:
             continue
 
-        # Role filter
         if ROLE_NAME not in [role.name for role in member.roles]:
             continue
 
@@ -137,9 +135,8 @@ async def showProgress(ctx, date: str = None):
         entries.append((member, value, percent))
 
     if not entries:
-        return await ctx.send("No valid entries found.")
+        return await ctx.send("No data for this date.")
 
-    # Sort highest → lowest
     entries.sort(key=lambda x: x[2], reverse=True)
 
     day_number = get_day_number()
@@ -153,17 +150,21 @@ async def showProgress(ctx, date: str = None):
     await ctx.send(message)
 
 # ===== REPORT GENERATION =====
-
 async def generate_report(guild):
-    data = load_data()
     yesterday = str(get_yesterday())
 
-    if yesterday not in data:
+    cursor.execute("""
+    SELECT user_id, value FROM progress WHERE date = ?
+    """, (yesterday,))
+
+    rows = cursor.fetchall()
+
+    if not rows:
         return "No data for yesterday."
 
     entries = []
 
-    for user_id, value in data[yesterday].items():
+    for user_id, value in rows:
         member = guild.get_member(int(user_id))
         if not member:
             continue
@@ -171,7 +172,6 @@ async def generate_report(guild):
         percent = (value / TARGET) * 100
         entries.append((member, value, percent))
 
-    # Sort highest → lowest
     entries.sort(key=lambda x: x[2], reverse=True)
 
     day_number = get_day_number()
