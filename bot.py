@@ -103,7 +103,50 @@ async def updateYesterday(ctx, member: discord.Member, value: float):
 
     await ctx.send(f"{member.mention} yesterday's progress updated.")
 
+# Shows Progress Immediately
+@bot.command()
+async def showProgress(ctx, date: str = None):
+    data = load_data()
+
+    # Default = today
+    if date is None:
+        date = str(get_today())
+
+    if date not in data:
+        return await ctx.send("No data for this date.")
+
+    entries = []
+
+    for user_id, value in data[date].items():
+        member = ctx.guild.get_member(int(user_id))
+        if not member:
+            continue
+
+        # Role filter
+        if ROLE_NAME not in [role.name for role in member.roles]:
+            continue
+
+        percent = (value / TARGET) * 100
+        entries.append((member, value, percent))
+
+    if not entries:
+        return await ctx.send("No valid entries found.")
+
+    # Sort highest → lowest
+    entries.sort(key=lambda x: x[2], reverse=True)
+
+    message = f"**Progress Report**\nDate: {date}\n\n"
+
+    for member, value, percent in entries:
+        bar = progress_bar(percent)
+        message += f"{member.mention} : {value}/{TARGET} ({percent:.2f}%)\n{bar}\n\n"
+
+    await ctx.send(message)
+
 # ===== REPORT GENERATION =====
+def format_date(date_obj):
+    return str(date_obj)
+
 async def generate_report(guild):
     data = load_data()
     yesterday = str(get_yesterday())
