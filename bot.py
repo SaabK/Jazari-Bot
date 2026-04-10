@@ -5,21 +5,27 @@ from dotenv import load_dotenv
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
 
-# ===== LOAD ENV =====
+# =========================
+# LOAD ENV
+# =========================
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
-# ===== CONFIG =====
+# =========================
+# CONFIG
+# =========================
 TARGET = 127
 ROLE_NAME = "Arabic Learner"
 CHANNEL_NAME = "arabic-updates"
 MAX_DAILY = 10
 START_DATE = datetime(2026, 3, 30).date()
 
-# ===== SQLITE SETUP =====
+# =========================
+# SQLITE SETUP
+# =========================
 DB_FILE = "progress.db"
 
-conn = sqlite3.connect(DB_FILE)
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -33,14 +39,18 @@ CREATE TABLE IF NOT EXISTS progress (
 
 conn.commit()
 
-# ===== BOT SETUP =====
+# =========================
+# BOT SETUP
+# =========================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!!', intents=intents)
+bot = commands.Bot(command_prefix="!!", intents=intents)
 
-# ===== HELPERS =====
+# =========================
+# HELPERS
+# =========================
 def get_today():
     return datetime.utcnow().date()
 
@@ -54,66 +64,117 @@ def progress_bar(percent):
     filled = int(percent // 5)
     return "█" * filled + "░" * (20 - filled)
 
-# ===== EVENTS =====
+# =========================
+# READY EVENT
+# =========================
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     daily_post.start()
 
-# ===== COMMANDS =====
-
-@bot.command()
-async def hello(ctx):
-    await ctx.send("Hello bro, I'm alive.")
-
 # =====================================================
-# UPDATE PROGRESS (SELF-AUTO USER)
+# UNIFIED UPDATE COMMAND (TODAY / YESTERDAY / ADMIN)
 # =====================================================
 @bot.command()
-async def updateProgress(ctx, value: float):
-    today = str(get_today())
+async def update(ctx, *args):
+    """
+    Usage:
+    !!update 4.5
+    !!update today 4.5
+    !!update yesterday 3.2
+    !!update @user today 5 (admin)
+    !!update @user yesterday 3 (admin)
+    """
+
     member = ctx.author
+    date = str(get_today())
+    value = None
 
+    # =========================
+    # CASE 1: SELF UPDATE
+    # =========================
+    if len(args) == 1:
+        try:
+            value = float(args[0])
+        except:
+            return await ctx.send("Invalid number format.")
+
+    # =========================
+    # CASE 2: DATE SPECIFIED
+    # =========================
+    elif len(args) == 2:
+        key = args[0].lower()
+
+        try:
+            value = float(args[1])
+        except:
+            return await ctx.send("Invalid number format.")
+
+        if key == "yesterday":
+            date = str(get_yesterday())
+        elif key == "today":
+            date = str(get_today())
+        else:
+            return await ctx.send("Use: today or yesterday")
+
+    # =========================
+    # CASE 3: ADMIN UPDATE USER
+    # =========================
+    elif len(args) == 3:
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.send("Admin only for updating others.")
+
+        if len(ctx.message.mentions) == 0:
+            return await ctx.send("You must mention a user.")
+
+        member = ctx.message.mentions[0]
+        key = args[1].lower()
+
+        try:
+            value = float(args[2])
+        except:
+            return await ctx.send("Invalid number format.")
+
+        if key == "yesterday":
+            date = str(get_yesterday())
+        elif key == "today":
+            date = str(get_today())
+        else:
+            return await ctx.send("Use: today or yesterday")
+
+    else:
+        return await ctx.send("Invalid usage.")
+
+    # =========================
+    # ROLE CHECK
+    # =========================
     if ROLE_NAME not in [role.name for role in member.roles]:
         return await ctx.send("User is not an Arabic Learner.")
 
+    # =========================
+    # ANTI-CHEAT
+    # =========================
     if value > MAX_DAILY and not ctx.author.guild_permissions.administrator:
         return await ctx.send("Value too high. Stop cheating.")
 
+    # =========================
+    # SAVE TO DATABASE
+    # =========================
     cursor.execute("""
     INSERT OR REPLACE INTO progress (date, user_id, value)
     VALUES (?, ?, ?)
-    """, (today, str(member.id), value))
+    """, (date, str(member.id), value))
 
     conn.commit()
 
-    await ctx.send(f"{member.mention} progress updated to {value}")
-
-# =====================================================
-# UPDATE YESTERDAY (SELF OR ADMIN)
-# =====================================================
-@bot.command()
-async def updateYesterday(ctx, value: float):
-    yesterday = str(get_yesterday())
-    member = ctx.author
-
-    if ROLE_NAME not in [role.name for role in member.roles]:
-        return await ctx.send("User is not an Arabic Learner.")
-
-    cursor.execute("""
-    INSERT OR REPLACE INTO progress (date, user_id, value)
-    VALUES (?, ?, ?)
-    """, (yesterday, str(member.id), value))
-
-    conn.commit()
-
-    await ctx.send(f"{member.mention} yesterday's progress updated.")
+    await ctx.send(f"{member.mention} updated for {date} → {value}")
 
 # =====================================================
 # SHOW PROGRESS
 # =====================================================
 @bot.command()
 async def showProgress(ctx, date: str = None):
+
     if date is None:
         date = str(get_today())
 
@@ -141,9 +202,7 @@ async def showProgress(ctx, date: str = None):
 
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    day_number = get_day_number()
-
-    message = f"**Progress Report**\nDay {day_number}, Date: {date}\n\n"
+    message = f"**Progress Report**\nDay {get_day_number()}, Date: {date}\n\n"
 
     for member, value, percent in entries:
         bar = progress_bar(percent)
@@ -152,9 +211,10 @@ async def showProgress(ctx, date: str = None):
     await ctx.send(message)
 
 # =====================================================
-# DAILY REPORT GENERATION (USES LAST STORED VALUE)
+# REPORT GENERATION (YESTERDAY AUTO POST)
 # =====================================================
 async def generate_report(guild):
+
     yesterday = str(get_yesterday())
 
     cursor.execute("""
@@ -181,9 +241,7 @@ async def generate_report(guild):
 
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    day_number = get_day_number()
-
-    message = f"**Day {day_number} Progress**\n"
+    message = f"**Day {get_day_number()} Progress**\n"
     message += f"Date: {yesterday}\n\n"
 
     for member, value, percent in entries:
@@ -193,7 +251,7 @@ async def generate_report(guild):
     return message
 
 # =====================================================
-# DAILY AUTO POST (10 AM PKT = 5 AM UTC)
+# DAILY POST (10 AM PKT = 5 AM UTC)
 # =====================================================
 @tasks.loop(minutes=1)
 async def daily_post():
@@ -206,5 +264,7 @@ async def daily_post():
                 report = await generate_report(guild)
                 await channel.send(report)
 
-# ===== RUN =====
+# =========================
+# RUN BOT
+# =========================
 bot.run(TOKEN)
