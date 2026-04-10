@@ -15,6 +15,7 @@ DATA_FILE = "progress.json"
 ROLE_NAME = "Arabic Learner"
 CHANNEL_NAME = "arabic-updates"
 MAX_DAILY = 10  # anti-cheat
+START_DATE = datetime(2026, 3, 30).date()  # change if your Day 1 is different
 
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
@@ -39,6 +40,12 @@ def get_today():
 
 def get_yesterday():
     return get_today() - timedelta(days=1)
+
+def format_date(date_obj):
+    return str(date_obj)
+
+def get_day_number():
+    return (get_today() - START_DATE).days + 1
 
 # ===== PROGRESS BAR =====
 def progress_bar(percent):
@@ -135,7 +142,9 @@ async def showProgress(ctx, date: str = None):
     # Sort highest → lowest
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    message = f"**Progress Report**\nDate: {date}\n\n"
+    day_number = get_day_number()
+
+    message = f"**Progress Report**\nDay {day_number}, Date: {date}\n\n"
 
     for member, value, percent in entries:
         bar = progress_bar(percent)
@@ -144,8 +153,6 @@ async def showProgress(ctx, date: str = None):
     await ctx.send(message)
 
 # ===== REPORT GENERATION =====
-def format_date(date_obj):
-    return str(date_obj)
 
 async def generate_report(guild):
     data = load_data()
@@ -167,7 +174,7 @@ async def generate_report(guild):
     # Sort highest → lowest
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    day_number = len(data)
+    day_number = get_day_number()
 
     message = f"**Day {day_number} Progress**\n"
     message += f"Date: {yesterday}\n\n"
