@@ -51,14 +51,17 @@ bot = commands.Bot(command_prefix="!!", intents=intents)
 # =========================
 # HELPERS
 # =========================
+def format_date(date_obj):
+    return date_obj.strftime("%d-%m-%Y")
+
 def get_today():
     return datetime.utcnow().date()
 
 def get_yesterday():
     return get_today() - timedelta(days=1)
 
-def get_day_number():
-    return (get_today() - START_DATE).days + 1
+def get_day_number(date_obj):
+    return (date_obj - START_DATE).days + 1
 
 def progress_bar(percent):
     filled = int(percent // 5)
@@ -73,35 +76,23 @@ async def on_ready():
     daily_post.start()
 
 # =====================================================
-# UNIFIED UPDATE COMMAND (TODAY / YESTERDAY / ADMIN)
+# UPDATE COMMAND
 # =====================================================
 @bot.command()
 async def update(ctx, *args):
-    """
-    Usage:
-    !!update 4.5
-    !!update today 4.5
-    !!update yesterday 3.2
-    !!update @user today 5 (admin)
-    !!update @user yesterday 3 (admin)
-    """
 
     member = ctx.author
-    date = str(get_today())
+    date = format_date(get_today())
     value = None
 
-    # =========================
-    # CASE 1: SELF UPDATE
-    # =========================
+    # CASE 1: !!update 4.5
     if len(args) == 1:
         try:
             value = float(args[0])
         except:
             return await ctx.send("Invalid number format.")
 
-    # =========================
-    # CASE 2: DATE SPECIFIED
-    # =========================
+    # CASE 2: !!update today/yesterday 4.5
     elif len(args) == 2:
         key = args[0].lower()
 
@@ -111,21 +102,19 @@ async def update(ctx, *args):
             return await ctx.send("Invalid number format.")
 
         if key == "yesterday":
-            date = str(get_yesterday())
+            date = format_date(get_yesterday())
         elif key == "today":
-            date = str(get_today())
+            date = format_date(get_today())
         else:
             return await ctx.send("Use: today or yesterday")
 
-    # =========================
-    # CASE 3: ADMIN UPDATE USER
-    # =========================
+    # CASE 3: ADMIN update others
     elif len(args) == 3:
         if not ctx.author.guild_permissions.administrator:
-            return await ctx.send("Admin only for updating others.")
+            return await ctx.send("Admin only.")
 
         if len(ctx.message.mentions) == 0:
-            return await ctx.send("You must mention a user.")
+            return await ctx.send("Mention a user.")
 
         member = ctx.message.mentions[0]
         key = args[1].lower()
@@ -136,30 +125,24 @@ async def update(ctx, *args):
             return await ctx.send("Invalid number format.")
 
         if key == "yesterday":
-            date = str(get_yesterday())
+            date = format_date(get_yesterday())
         elif key == "today":
-            date = str(get_today())
+            date = format_date(get_today())
         else:
             return await ctx.send("Use: today or yesterday")
 
     else:
         return await ctx.send("Invalid usage.")
 
-    # =========================
     # ROLE CHECK
-    # =========================
     if ROLE_NAME not in [role.name for role in member.roles]:
         return await ctx.send("User is not an Arabic Learner.")
 
-    # =========================
     # ANTI-CHEAT
-    # =========================
     if value > MAX_DAILY and not ctx.author.guild_permissions.administrator:
-        return await ctx.send("Value too high. Stop cheating.")
+        return await ctx.send("Value too high.")
 
-    # =========================
-    # SAVE TO DATABASE
-    # =========================
+    # SAVE
     cursor.execute("""
     INSERT OR REPLACE INTO progress (date, user_id, value)
     VALUES (?, ?, ?)
@@ -176,33 +159,37 @@ async def update(ctx, *args):
 async def showProgress(ctx, date: str = None):
 
     if date is None:
-        date = str(get_today())
-
-    cursor.execute("""
-    SELECT user_id, value FROM progress WHERE date = ?
-    """, (date,))
-
-    rows = cursor.fetchall()
+        date_obj = get_today()
+        date = format_date(date_obj)
+    else:
+        try:
+            date_obj = datetime.strptime(date, "%d-%m-%Y").date()
+        except:
+            return await ctx.send("Use DD-MM-YYYY format.")
 
     entries = []
 
-    for user_id, value in rows:
-        member = ctx.guild.get_member(int(user_id))
-        if not member:
-            continue
-
+    for member in ctx.guild.members:
         if ROLE_NAME not in [role.name for role in member.roles]:
             continue
 
+        cursor.execute("""
+        SELECT value FROM progress WHERE date = ? AND user_id = ?
+        """, (date, str(member.id)))
+
+        row = cursor.fetchone()
+
+        value = row[0] if row else 0
         percent = (value / TARGET) * 100
+
         entries.append((member, value, percent))
 
     if not entries:
-        return await ctx.send("No data for this date.")
+        return await ctx.send("No data.")
 
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    message = f"**Progress Report**\nDay {get_day_number()}, Date: {date}\n\n"
+    message = f"**Progress Report**\nDay {get_day_number(date_obj)}, Date: {date}\n\n"
 
     for member, value, percent in entries:
         bar = progress_bar(percent)
@@ -211,37 +198,36 @@ async def showProgress(ctx, date: str = None):
     await ctx.send(message)
 
 # =====================================================
-# REPORT GENERATION (YESTERDAY AUTO POST)
+# GENERATE REPORT (YESTERDAY)
 # =====================================================
 async def generate_report(guild):
 
-    yesterday = str(get_yesterday())
-
-    cursor.execute("""
-    SELECT user_id, value FROM progress WHERE date = ?
-    """, (yesterday,))
-
-    rows = cursor.fetchall()
-
-    if not rows:
-        return "No data for yesterday."
+    yesterday_date = get_yesterday()
+    yesterday = format_date(yesterday_date)
 
     entries = []
 
-    for user_id, value in rows:
-        member = guild.get_member(int(user_id))
-        if not member:
-            continue
-
+    for member in guild.members:
         if ROLE_NAME not in [role.name for role in member.roles]:
             continue
 
+        cursor.execute("""
+        SELECT value FROM progress WHERE date = ? AND user_id = ?
+        """, (yesterday, str(member.id)))
+
+        row = cursor.fetchone()
+
+        value = row[0] if row else 0
         percent = (value / TARGET) * 100
+
         entries.append((member, value, percent))
+
+    if not entries:
+        return "No data."
 
     entries.sort(key=lambda x: x[2], reverse=True)
 
-    message = f"**Day {get_day_number()} Progress**\n"
+    message = f"**Day {get_day_number(yesterday_date)} Progress**\n"
     message += f"Date: {yesterday}\n\n"
 
     for member, value, percent in entries:
@@ -251,7 +237,7 @@ async def generate_report(guild):
     return message
 
 # =====================================================
-# DAILY POST (10 AM PKT = 5 AM UTC)
+# DAILY POST
 # =====================================================
 @tasks.loop(minutes=1)
 async def daily_post():
@@ -265,6 +251,6 @@ async def daily_post():
                 await channel.send(report)
 
 # =========================
-# RUN BOT
+# RUN
 # =========================
 bot.run(TOKEN)
